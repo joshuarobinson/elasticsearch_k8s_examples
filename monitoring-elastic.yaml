@@ -1,0 +1,36 @@
+---
+apiVersion: elasticsearch.k8s.elastic.co/v1beta1
+kind: Elasticsearch
+metadata:
+  name: elastic-internal
+  namespace: kube-system
+spec:
+  version: 7.5.0
+  nodeSets:
+  - count: 3
+    name: all-nodes
+    config:
+      node.master: true
+      node.data: true
+      node.ingest: true
+    volumeClaimTemplates:
+    - metadata:
+        name: elasticsearch-data
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1200Gi
+        storageClassName: pure-block
+---
+apiVersion: kibana.k8s.elastic.co/v1beta1
+kind: Kibana
+metadata:
+  name: elastic-internal
+  namespace: kube-system
+spec:
+  version: 7.5.0
+  count: 1
+  elasticsearchRef:
+    name: elastic-internal

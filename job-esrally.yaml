@@ -1,0 +1,61 @@
+---
+kind: ConfigMap 
+apiVersion: v1 
+metadata:
+  name: esrally-trackparams-cfg
+data:
+  params.json: |
+    {
+       "number_of_shards": 20,
+       "number_of_replicas": 0,
+       "ingest_percentage": 100,
+       "bulk_size": 10000,
+       "bulk_indexing_clients": 8,
+       "index_settings": { "refresh_interval":-1 }
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: esrally
+spec:
+  template:
+    spec:
+      initContainers:
+      - name: logrotate
+        image: ubuntu:18.04
+        command: ["/bin/sh"]
+        args: ["-c", "mv /data/logs/rally.log /data/logs/rally.log.$(date +%s) || true"]
+        volumeMounts:
+        - name: esrally-data
+          mountPath: /data/
+      containers:
+      - name: esrally
+        image: elastic/rally
+        env:
+        - name: ELASTICPASS
+          valueFrom:
+            secretKeyRef:
+              name: quickstart-es-elastic-user
+              key: elastic
+        args: ['--track=nyc_taxis',
+               '--pipeline=benchmark-only',
+               '--challenge=append-no-conflicts-index-only',
+               '--client-options="use_ssl:true,verify_certs:false,basic_auth_user:''elastic''"',
+               '--track-params=/rally/params.json',
+               '--target-hosts=https://elastic:$(ELASTICPASS)@quickstart-es-http:9200']
+        volumeMounts:
+        - name: esrally-data
+          mountPath: /rally/.rally
+        - name: trackparams-cfg-vol
+          mountPath: /rally/params.json
+          subPath: params.json
+        imagePullPolicy: Always
+      restartPolicy: Never
+      volumes:
+      - name: esrally-data
+        persistentVolumeClaim:
+          claimName: esrally-claim
+      - name: trackparams-cfg-vol
+        configMap:
+          name: esrally-trackparams-cfg

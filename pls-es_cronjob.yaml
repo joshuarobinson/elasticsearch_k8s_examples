@@ -1,0 +1,86 @@
+---
+kind: ConfigMap 
+apiVersion: v1 
+metadata:
+  name: pls-es-scripts
+data:
+  pls-to-es.sh: |
+    set -e
+    rm -rf /scratch/*
+    TODAY=$(date +"%Y-%m-%d")
+    IDXNAME="plsidx-$EXPORTNAME-$TODAY"
+    echo "Using index $IDXNAME"
+
+    curl -X PUT -u "elastic:$ESPASSWORD" -k https://quickstart-es-http:9200/$IDXNAME?pretty -H 'Content-Type: application/json' -d '
+      {
+        "settings" : {
+          "number_of_shards" : 3
+        },
+        "mappings" : {
+          "properties" : {
+            "atime" : { "type" : "date", "format" : "epoch_second" },
+            "ctime" : { "type" : "date", "format" : "epoch_second" },
+            "mtime" : { "type" : "date", "format" : "epoch_second" }
+          }
+        }
+      }'
+    echo ""
+
+    pls --ipaddr $IPADDR --export /$EXPORTNAME -R --json | sed 's/^/{ \"index\": {} }\n/g' | split -a 5 -l 2000 - /scratch/
+    for fname in /scratch/*; do
+      curl -S -s -XPOST -u "elastic:$ESPASSWORD" -H 'Content-Type: application/x-ndjson' -k https://quickstart-es-http:9200/$IDXNAME/_bulk --data-binary @$fname && echo "" && echo "Success"
+      rm $fname
+    done
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: pls-scratch-claim
+spec:
+  storageClassName: pure-file
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Ti
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: cron-pls
+spec:
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: rapidfile-pls
+              image: joshuarobinson/rapidfile
+              env:
+              - name: IPADDR
+                value: 10.62.116.100
+              - name: EXPORTNAME
+                value: export-artifacts
+              - name: ESPASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: quickstart-es-elastic-user
+                    key: elastic
+              volumeMounts:
+              - name: scratch-vol
+                mountPath: /scratch
+              - name: pls-es-scripts-vol
+                mountPath: /opt/pls-to-es.sh
+                subPath: pls-to-es.sh
+              command: ["sh", "-c", "--"]
+              args: ["bash /opt/pls-to-es.sh"]
+          volumes:
+          - name: pls-es-scripts-vol
+            configMap:
+              name: pls-es-scripts
+          - name: scratch-vol
+            persistentVolumeClaim:
+              claimName: pls-scratch-claim
+          restartPolicy: OnFailure
